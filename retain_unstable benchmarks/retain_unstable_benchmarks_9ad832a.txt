@@ -1,0 +1,101 @@
+    vec::bench_retain_unstable_100000               36563.43ns/iter  +/- 619.68
+    vec::bench_retain_unstable_none_100000              1.24ns/iter    +/- 0.01
+    vec::bench_retain_unstable_quarter_false_100000 51449.73ns/iter +/- 2878.33
+
+    vec::bench_retain_unstable_whole_100000         15662.04ns/iter  +/- 135.53
+
+    vec::bench_retain_unstable_whole_u8_000004          1.86ns/iter    +/- 0.01
+    vec::bench_retain_unstable_whole_u8_000008          2.28ns/iter    +/- 0.01
+    vec::bench_retain_unstable_whole_u8_000016          3.52ns/iter    +/- 0.01
+    vec::bench_retain_unstable_whole_u8_000032          6.00ns/iter    +/- 0.09
+    vec::bench_retain_unstable_whole_u8_000064         10.97ns/iter    +/- 0.11
+    vec::bench_retain_unstable_whole_u8_000128         21.12ns/iter    +/- 0.23
+    vec::bench_retain_unstable_whole_u8_000256         40.95ns/iter    +/- 0.04
+    vec::bench_retain_unstable_whole_u8_000512         84.38ns/iter    +/- 0.10
+    vec::bench_retain_unstable_whole_u8_001000        160.71ns/iter    +/- 0.26
+    vec::bench_retain_unstable_whole_u8_010000       1556.72ns/iter    +/- 2.64
+    vec::bench_retain_unstable_whole_u8_100000      15519.22ns/iter   +/- 37.93
+
+    vec::bench_retain_unstable_whole_u16_000004         1.66ns/iter    +/- 0.01
+    vec::bench_retain_unstable_whole_u16_000008         2.09ns/iter    +/- 0.01
+    vec::bench_retain_unstable_whole_u16_000016         3.33ns/iter    +/- 0.14
+    vec::bench_retain_unstable_whole_u16_000032         5.89ns/iter    +/- 0.09
+    vec::bench_retain_unstable_whole_u16_000064        10.86ns/iter    +/- 0.67
+    vec::bench_retain_unstable_whole_u16_000128        20.88ns/iter    +/- 0.39
+    vec::bench_retain_unstable_whole_u16_000256        40.72ns/iter    +/- 0.32
+    vec::bench_retain_unstable_whole_u16_000512        84.59ns/iter    +/- 0.18
+    vec::bench_retain_unstable_whole_u16_001000       160.71ns/iter    +/- 0.54
+    vec::bench_retain_unstable_whole_u16_010000      1556.66ns/iter    +/- 2.00
+    vec::bench_retain_unstable_whole_u16_100000     15517.92ns/iter   +/- 19.14
+
+    vec::bench_retain_unstable_whole_u32_000004         1.66ns/iter    +/- 0.01
+    vec::bench_retain_unstable_whole_u32_000008         2.08ns/iter    +/- 0.01
+    vec::bench_retain_unstable_whole_u32_000016         3.42ns/iter    +/- 0.08
+    vec::bench_retain_unstable_whole_u32_000032         5.93ns/iter    +/- 0.09
+    vec::bench_retain_unstable_whole_u32_000064        10.95ns/iter    +/- 0.18
+    vec::bench_retain_unstable_whole_u32_000128        20.86ns/iter    +/- 0.21
+    vec::bench_retain_unstable_whole_u32_000256        45.23ns/iter    +/- 5.01
+    vec::bench_retain_unstable_whole_u32_000512        84.58ns/iter    +/- 0.12
+    vec::bench_retain_unstable_whole_u32_001000       160.74ns/iter    +/- 0.52
+    vec::bench_retain_unstable_whole_u32_010000      1566.32ns/iter    +/- 5.97
+    vec::bench_retain_unstable_whole_u32_100000     15626.45ns/iter   +/- 58.76
+
+    vec::bench_retain_unstable_whole_u64_000004         1.66ns/iter    +/- 0.00
+    vec::bench_retain_unstable_whole_u64_000008         2.24ns/iter    +/- 0.20
+    vec::bench_retain_unstable_whole_u64_000016         3.53ns/iter    +/- 0.19
+    vec::bench_retain_unstable_whole_u64_000032         6.03ns/iter    +/- 0.22
+    vec::bench_retain_unstable_whole_u64_000064        11.00ns/iter    +/- 0.21
+    vec::bench_retain_unstable_whole_u64_000128        20.90ns/iter    +/- 0.45
+    vec::bench_retain_unstable_whole_u64_000256        40.77ns/iter    +/- 0.66
+    vec::bench_retain_unstable_whole_u64_000512        85.29ns/iter    +/- 1.03
+    vec::bench_retain_unstable_whole_u64_001000       160.48ns/iter    +/- 1.51
+    vec::bench_retain_unstable_whole_u64_010000      1558.87ns/iter   +/- 16.21
+    vec::bench_retain_unstable_whole_u64_100000     15710.06ns/iter  +/- 383.21
+
+    vec::bench_retain_unstable_u8_000004                6.27ns/iter    +/- 0.06
+    vec::bench_retain_unstable_u8_000008                6.97ns/iter    +/- 0.11
+    vec::bench_retain_unstable_u8_000016                9.29ns/iter    +/- 2.05
+    vec::bench_retain_unstable_u8_000032               16.57ns/iter    +/- 1.01
+    vec::bench_retain_unstable_u8_000064               27.53ns/iter    +/- 4.85
+    vec::bench_retain_unstable_u8_000128               50.94ns/iter    +/- 2.90
+    vec::bench_retain_unstable_u8_000256               92.18ns/iter    +/- 4.19
+    vec::bench_retain_unstable_u8_000512              181.76ns/iter    +/- 2.15
+    vec::bench_retain_unstable_u8_001000              334.72ns/iter    +/- 4.55
+    vec::bench_retain_unstable_u8_010000             3260.39ns/iter   +/- 28.63
+    vec::bench_retain_unstable_u8_100000            32454.35ns/iter  +/- 115.06
+
+    vec::bench_retain_unstable_u16_000004               5.79ns/iter    +/- 0.15
+    vec::bench_retain_unstable_u16_000008               6.96ns/iter    +/- 0.03
+    vec::bench_retain_unstable_u16_000016               9.90ns/iter    +/- 0.25
+    vec::bench_retain_unstable_u16_000032              15.05ns/iter    +/- 1.80
+    vec::bench_retain_unstable_u16_000064              26.86ns/iter    +/- 3.79
+    vec::bench_retain_unstable_u16_000128              50.21ns/iter    +/- 1.83
+    vec::bench_retain_unstable_u16_000256              91.89ns/iter    +/- 3.33
+    vec::bench_retain_unstable_u16_000512             175.47ns/iter    +/- 2.48
+    vec::bench_retain_unstable_u16_001000             341.28ns/iter    +/- 3.05
+    vec::bench_retain_unstable_u16_010000            3369.49ns/iter   +/- 38.55
+    vec::bench_retain_unstable_u16_100000           33784.22ns/iter  +/- 150.95
+
+    vec::bench_retain_unstable_u32_000004               5.86ns/iter    +/- 0.03
+    vec::bench_retain_unstable_u32_000008               6.55ns/iter    +/- 0.03
+    vec::bench_retain_unstable_u32_000016               9.06ns/iter    +/- 0.05
+    vec::bench_retain_unstable_u32_000032              15.13ns/iter    +/- 0.91
+    vec::bench_retain_unstable_u32_000064              26.00ns/iter    +/- 0.41
+    vec::bench_retain_unstable_u32_000128              52.05ns/iter    +/- 4.56
+    vec::bench_retain_unstable_u32_000256              94.58ns/iter    +/- 0.67
+    vec::bench_retain_unstable_u32_000512             188.41ns/iter    +/- 2.63
+    vec::bench_retain_unstable_u32_001000             366.19ns/iter    +/- 3.19
+    vec::bench_retain_unstable_u32_010000            3637.99ns/iter   +/- 10.76
+    vec::bench_retain_unstable_u32_100000           36411.14ns/iter  +/- 247.22
+
+    vec::bench_retain_unstable_u64_000004               5.71ns/iter    +/- 0.08
+    vec::bench_retain_unstable_u64_000008               6.70ns/iter    +/- 0.13
+    vec::bench_retain_unstable_u64_000016               9.63ns/iter    +/- 0.09
+    vec::bench_retain_unstable_u64_000032              16.05ns/iter    +/- 0.14
+    vec::bench_retain_unstable_u64_000064              27.87ns/iter    +/- 0.17
+    vec::bench_retain_unstable_u64_000128              54.88ns/iter    +/- 0.23
+    vec::bench_retain_unstable_u64_000256             108.75ns/iter    +/- 1.52
+    vec::bench_retain_unstable_u64_000512             214.78ns/iter    +/- 1.37
+    vec::bench_retain_unstable_u64_001000             416.98ns/iter    +/- 2.12
+    vec::bench_retain_unstable_u64_010000            4164.23ns/iter   +/- 21.13
+    vec::bench_retain_unstable_u64_100000           41787.79ns/iter  +/- 701.76
