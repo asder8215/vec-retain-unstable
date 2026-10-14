@@ -1,4 +1,46 @@
-Vec::retain_unstable benchmark with backward search on element to keep and forward search on element to remove
+Vec::retain_unstable that does the following:
+1) scan backward on something we want to keep (dropping others)
+2) scan forward on something we want to remove
+3) swap_remove to put 1 in 2's place (or nothing if 1 is at the end)
+
+fn retain_unstable<T>(vec: &mut Vec<T>, mut pred: impl FnMut(&mut T) -> bool) {
+        let mut front = 0;
+
+        loop {
+            // Ensure that the last element is something we want to keep.
+            loop {
+                let Some(_last) = self.last() else {
+                    // empty vec; we're done
+                    return;
+                };
+
+                let back = self.len() - 1;
+                if f(&mut self[back]) {
+                    break;
+                } else {
+                    self.pop().unwrap();
+                }
+            }
+
+            // Now that we have something to keep, move it over something we don't want.
+            loop {
+                // We don't get here for empty vecs, so the subtraction can't overflow.
+                if self.len() - 1 <= front {
+                    // there's nowhere to move it, so we're done.
+                    return;
+                }
+
+                if f(&mut self[front]) {
+                    front += 1;
+                } else {
+                    self[front] = self.pop().unwrap();
+                    front += 1;
+                    // we used up the one we found, time to scan the end again
+                    break;
+                }
+            }
+        }
+}
 
     vec::bench_retain_unstable_100000               41873.91ns/iter  +/- 420.75
     vec::bench_retain_unstable_none_100000              1.24ns/iter    +/- 0.01

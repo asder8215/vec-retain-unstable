@@ -1,0 +1,265 @@
+Vec::retain_unstable that does the following:
+1) scan forward for something we want to remove (dropping it)
+2) swap_remove the element with the last element (or nothing if no elements remain)
+3) Try checking the element again to see if the predicate returns true or false. If true rinse and repeat from 1), if false do 2)
+
+pub fn retain_unstable<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut T) -> bool,
+    {
+    let original_len = self.len();
+
+    if original_len == 0 {
+        // Empty case: explicit return allows better optimization, vs letting compiler infer it
+        return;
+    }
+
+        // Vec: [Kept,    Kept,    Hole,    Unchecked,    Unchecked,    Swap,    Dropped,    Dropped]
+        //      |                  ^- write ^- read                     ^-read_back                 |
+        //
+        // Kept: Elements which predicate returns true on.
+        // Hole: Moved or dropped element slot.
+        // Unchecked: Unchecked valid elements.
+        // Swap: The last element that the read_index was pointing to. This could be an element that the
+        // predicate returns true on and we want to overwrite the `Hole` at the write index with this
+        // value or an element that the predicate panicked in which case we still overwrite the `Hole`
+        // with this value (since we only drop elements that the predicate returns false on).
+        // Dropped: Elements which predicate returns false on from the read_back index.
+        //
+        // This drop guard will be invoked when predicate or `drop` of element panicked.
+        // It overwrites the `Hole` with the last `Swap` at the write index and `set_len` to the correct
+        // length. We take care of the following:
+        //     - Do not `drop` any element marked as `Swap`. This is because the `Hole` is
+        //       written with the `Swap` value via `copy_nonoverlapping` outside of this guard,
+        //       and dropping `Swap` will leave `Hole` back to being a `Hole` (which can cause
+        //       a double drop if a `drop` of an element panicked or create an invalid memory
+        //       state for the Vec).
+        //     - We also make sure that `Swap` is not included within the `set_len` of Vec,
+        //       so it's impossible for the Vec to do a double drop on `Swap` and a `Hole`
+        //       written with the content of `Swap`.
+        //     - In the event that `Hole` and `Swap` are pointing to the same element (that is
+        //       read_back == write), we ensure that `remaining` here will be 0, so that no copy
+        //       occurs on overlapping memory.
+        // In cases when predicate and `drop` never panick, this will be optimized out.
+        struct PanicGuard<'a, T, A: Allocator> {
+            v: &'a mut Vec<T, A>,
+            read: usize,
+            read_back: usize,
+            // write: usize,
+            has_hole: bool,
+        }
+
+        impl<T, A: Allocator> Drop for PanicGuard<'_, T, A> {
+            #[cold]
+            fn drop(&mut self) {
+                if self.has_hole && self.read_back != self.read {
+                    // SAFETY: We can ensure the following:
+                    //  * `read_back` (`Swap`) always points to the last item in the vec;
+                    //    we can effectively treat `read_back` + 1 as the length of the vec
+                    //  * in the event that `read_back` == `write`, we can ensure that
+                    //    remaining = 0, so no copying actually occurs on overlapping memory
+                    //  * we set our vec's len to not include `read_back` to avoid double dropping
+                    unsafe {
+                        ptr::copy_nonoverlapping(
+                            self.v.as_ptr().add(self.read_back),
+                            self.v.as_mut_ptr().add(self.read),
+                            1,
+                        );
+                    }
+                }
+
+                // SAFETY: After filling the hole, our items are in contiguous memory.
+                unsafe {
+                    self.v.set_len(if self.has_hole { self.read_back } else { self.read_back + 1 });
+                }
+            }
+        }
+
+        let mut read = 0;
+        loop {
+            // SAFETY: read < original_len
+            let cur = unsafe { self.get_unchecked_mut(read) };
+            if hint::unlikely(!f(cur)) {
+                break;
+            }
+            read += 1;
+            if read == original_len {
+                // All elements are kept, return early.
+                return;
+            }
+        }
+
+        // Critical section starts here and at least one element is going to be removed.
+        // Advance `g.read` early to avoid double drop if `drop_in_place` panicked.
+        let mut g =
+            // PanicGuard { v: self, read: read + 1, write: read, read_back: original_len - 1, has_hole: true };
+            PanicGuard { v: self, read: read, read_back: original_len - 1, has_hole: true };
+        // SAFETY: previous `read` is always less than original_len.
+        unsafe { ptr::drop_in_place(&mut *g.v.as_mut_ptr().add(read)) };
+
+        if g.read_back != g.read {
+            // SAFETY: This is safe because:
+            // * `swap` (g.read_back) currently points to an element that predicate returned true on
+            // that we want to write in the `Hole` that `g.write` is pointing to; it is impossible
+            // for `g.read_back` == `g.write` (hence no overlapping memory)
+            // * We decrement g.read_back and increment g.write to ensure that they are not double
+            // dropped in future iterations.
+            // Logically, this is overwriting vec[write] with vec[read_back]
+            unsafe {
+                let hole = &mut *g.v.as_mut_ptr().add(g.read);
+                let swap = &mut *g.v.as_mut_ptr().add(g.read_back);
+                ptr::copy_nonoverlapping(swap, hole, 1);
+                g.read_back -= 1;
+                g.has_hole = false;
+            }
+        } else {
+            // We are leaving the critical section and no panic happened,
+            // Commit the length change and forget the guard.
+            // SAFETY: `write` is always less than or equal to original_len.
+            unsafe { g.v.set_len(g.read) };
+            mem::forget(g);
+            return;
+        }
+
+        while g.read <= g.read_back {
+            // SAFETY: g.read and g.read_back is less than the current
+            // length of the vec
+            let hole = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
+            if !f(hole) {
+                // Note that we have a hole currently so we can avoid a double drop if
+                // `drop_in_place` panicked.
+                g.has_hole = true;
+                // SAFETY: We never touch this element again after dropped.
+                unsafe { ptr::drop_in_place(hole) };
+
+                if g.read_back != g.read {
+                    // SAFETY: This is safe because:
+                    // * `swap` (g.read_back) currently points to an element that predicate returned true on
+                    // that we want to write in the `Hole` that `g.write` is pointing to; it is impossible
+                    // for `g.read_back` == `g.write` (hence no overlapping memory)
+                    // * We decrement g.read_back and increment g.write to ensure that they are not double
+                    // dropped in future iterations.
+                    // Logically, this is overwriting vec[write] with vec[read_back]
+                    unsafe {
+                        let swap = &mut *g.v.as_mut_ptr().add(g.read_back);
+                        ptr::copy_nonoverlapping(swap, hole, 1);
+                        g.read_back -= 1;
+                        g.has_hole = false;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                g.read += 1;
+            }
+        }
+
+        // We are leaving the critical section and no panic happened,
+        // Commit the length change and forget the guard.
+        // SAFETY: `write` is always less than or equal to original_len.
+        unsafe { g.v.set_len(g.read) };
+        mem::forget(g);
+
+}
+
+    vec::bench_retain_unstable_100000               37109.69ns/iter +/- 1813.52
+    vec::bench_retain_unstable_none_100000              1.45ns/iter    +/- 0.20
+    vec::bench_retain_unstable_quarter_false_100000 32537.36ns/iter +/- 2992.22
+
+    vec::bench_retain_unstable_whole_100000         16133.43ns/iter  +/- 947.28
+
+    vec::bench_retain_unstable_whole_u8_000004          2.07ns/iter    +/- 0.24
+    vec::bench_retain_unstable_whole_u8_000008          2.48ns/iter    +/- 0.29
+    vec::bench_retain_unstable_whole_u8_000016          3.69ns/iter    +/- 0.48
+    vec::bench_retain_unstable_whole_u8_000032          6.35ns/iter    +/- 0.08
+    vec::bench_retain_unstable_whole_u8_000064         11.51ns/iter    +/- 0.25
+    vec::bench_retain_unstable_whole_u8_000128         21.12ns/iter    +/- 3.44
+    vec::bench_retain_unstable_whole_u8_000256         47.68ns/iter    +/- 5.87
+    vec::bench_retain_unstable_whole_u8_000512         89.40ns/iter    +/- 9.96
+    vec::bench_retain_unstable_whole_u8_001000        166.72ns/iter    +/- 5.05
+    vec::bench_retain_unstable_whole_u8_010000       1615.02ns/iter   +/- 91.95
+    vec::bench_retain_unstable_whole_u8_100000      16097.64ns/iter  +/- 911.82
+
+    vec::bench_retain_unstable_whole_u16_000004         2.07ns/iter    +/- 0.23
+    vec::bench_retain_unstable_whole_u16_000008         2.49ns/iter    +/- 0.29
+    vec::bench_retain_unstable_whole_u16_000016         3.65ns/iter    +/- 0.43
+    vec::bench_retain_unstable_whole_u16_000032         6.34ns/iter    +/- 0.07
+    vec::bench_retain_unstable_whole_u16_000064        11.69ns/iter    +/- 1.44
+    vec::bench_retain_unstable_whole_u16_000128        21.53ns/iter    +/- 3.09
+    vec::bench_retain_unstable_whole_u16_000256        47.81ns/iter    +/- 4.60
+    vec::bench_retain_unstable_whole_u16_000512        89.30ns/iter    +/- 8.78
+    vec::bench_retain_unstable_whole_u16_001000       168.91ns/iter   +/- 14.24
+    vec::bench_retain_unstable_whole_u16_010000      1613.79ns/iter   +/- 91.23
+    vec::bench_retain_unstable_whole_u16_100000     16091.81ns/iter  +/- 926.30
+
+    vec::bench_retain_unstable_whole_u32_000004         2.16ns/iter    +/- 0.20
+    vec::bench_retain_unstable_whole_u32_000008         2.48ns/iter    +/- 0.28
+    vec::bench_retain_unstable_whole_u32_000016         3.60ns/iter    +/- 0.52
+    vec::bench_retain_unstable_whole_u32_000032         6.56ns/iter    +/- 0.46
+    vec::bench_retain_unstable_whole_u32_000064        11.87ns/iter    +/- 2.03
+    vec::bench_retain_unstable_whole_u32_000128        22.13ns/iter    +/- 3.53
+    vec::bench_retain_unstable_whole_u32_000256        43.14ns/iter    +/- 5.67
+    vec::bench_retain_unstable_whole_u32_000512        89.32ns/iter   +/- 13.07
+    vec::bench_retain_unstable_whole_u32_001000       169.69ns/iter   +/- 15.76
+    vec::bench_retain_unstable_whole_u32_010000      1634.08ns/iter  +/- 127.89
+    vec::bench_retain_unstable_whole_u32_100000     16397.78ns/iter +/- 1372.86
+
+    vec::bench_retain_unstable_whole_u64_000004         2.17ns/iter    +/- 0.27
+    vec::bench_retain_unstable_whole_u64_000008         2.60ns/iter    +/- 0.34
+    vec::bench_retain_unstable_whole_u64_000016         3.77ns/iter    +/- 0.47
+    vec::bench_retain_unstable_whole_u64_000032         6.38ns/iter    +/- 0.22
+    vec::bench_retain_unstable_whole_u64_000064        11.17ns/iter    +/- 1.88
+    vec::bench_retain_unstable_whole_u64_000128        21.14ns/iter    +/- 3.17
+    vec::bench_retain_unstable_whole_u64_000256        42.74ns/iter    +/- 5.19
+    vec::bench_retain_unstable_whole_u64_000512        89.98ns/iter    +/- 9.06
+    vec::bench_retain_unstable_whole_u64_001000       169.41ns/iter   +/- 14.02
+    vec::bench_retain_unstable_whole_u64_010000      1636.89ns/iter  +/- 127.07
+    vec::bench_retain_unstable_whole_u64_100000     16267.36ns/iter  +/- 220.21
+
+    vec::bench_retain_unstable_u8_000004                7.17ns/iter    +/- 0.39
+    vec::bench_retain_unstable_u8_000008                8.02ns/iter    +/- 0.59
+    vec::bench_retain_unstable_u8_000016               11.45ns/iter    +/- 0.16
+    vec::bench_retain_unstable_u8_000032               17.41ns/iter    +/- 2.94
+    vec::bench_retain_unstable_u8_000064               35.44ns/iter    +/- 3.97
+    vec::bench_retain_unstable_u8_000128               56.97ns/iter    +/- 8.56
+    vec::bench_retain_unstable_u8_000256              110.06ns/iter   +/- 15.89
+    vec::bench_retain_unstable_u8_000512              204.89ns/iter   +/- 27.66
+    vec::bench_retain_unstable_u8_001000              404.45ns/iter   +/- 45.58
+    vec::bench_retain_unstable_u8_010000             3894.31ns/iter  +/- 363.03
+    vec::bench_retain_unstable_u8_100000            38807.45ns/iter +/- 3664.24
+
+    vec::bench_retain_unstable_u16_000004               6.59ns/iter    +/- 0.55
+    vec::bench_retain_unstable_u16_000008               9.31ns/iter    +/- 1.68
+    vec::bench_retain_unstable_u16_000016              13.43ns/iter    +/- 2.45
+    vec::bench_retain_unstable_u16_000032              18.30ns/iter    +/- 2.45
+    vec::bench_retain_unstable_u16_000064              38.09ns/iter    +/- 3.49
+    vec::bench_retain_unstable_u16_000128              65.76ns/iter    +/- 1.51
+    vec::bench_retain_unstable_u16_000256             125.13ns/iter   +/- 11.86
+    vec::bench_retain_unstable_u16_000512             242.10ns/iter   +/- 26.48
+    vec::bench_retain_unstable_u16_001000             460.66ns/iter   +/- 58.91
+    vec::bench_retain_unstable_u16_010000            4609.21ns/iter  +/- 497.60
+    vec::bench_retain_unstable_u16_100000           44003.31ns/iter +/- 7273.98
+
+    vec::bench_retain_unstable_u32_000004               6.71ns/iter    +/- 1.24
+    vec::bench_retain_unstable_u32_000008               8.76ns/iter    +/- 1.01
+    vec::bench_retain_unstable_u32_000016              12.62ns/iter    +/- 1.78
+    vec::bench_retain_unstable_u32_000032              18.74ns/iter    +/- 3.04
+    vec::bench_retain_unstable_u32_000064              34.91ns/iter    +/- 8.79
+    vec::bench_retain_unstable_u32_000128              57.57ns/iter    +/- 3.21
+    vec::bench_retain_unstable_u32_000256             108.74ns/iter   +/- 13.84
+    vec::bench_retain_unstable_u32_000512             195.65ns/iter   +/- 27.20
+    vec::bench_retain_unstable_u32_001000             381.82ns/iter   +/- 49.42
+    vec::bench_retain_unstable_u32_010000            5091.16ns/iter +/- 1284.24
+    vec::bench_retain_unstable_u32_100000           38021.31ns/iter +/- 1487.60
+
+    vec::bench_retain_unstable_u64_000004               6.54ns/iter    +/- 0.93
+    vec::bench_retain_unstable_u64_000008               9.52ns/iter    +/- 1.93
+    vec::bench_retain_unstable_u64_000016              14.05ns/iter    +/- 2.69
+    vec::bench_retain_unstable_u64_000032              19.99ns/iter    +/- 1.66
+    vec::bench_retain_unstable_u64_000064              31.94ns/iter    +/- 4.57
+    vec::bench_retain_unstable_u64_000128              69.78ns/iter    +/- 8.09
+    vec::bench_retain_unstable_u64_000256             134.42ns/iter   +/- 11.47
+    vec::bench_retain_unstable_u64_000512             275.34ns/iter   +/- 18.23
+    vec::bench_retain_unstable_u64_001000             533.08ns/iter   +/- 26.96
+    vec::bench_retain_unstable_u64_010000            5277.15ns/iter  +/- 306.75
+    vec::bench_retain_unstable_u64_100000           53322.41ns/iter +/- 2505.50
