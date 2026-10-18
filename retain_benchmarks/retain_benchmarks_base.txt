@@ -1,6 +1,8 @@
     vec::bench_retain_100000                    37476.58ns/iter +/- 8850.81
     vec::bench_retain_none_100000               1.24ns/iter +/- 0.01
     vec::bench_retain_quarter_false_100000      34050.51ns/iter +/- 117.18
+    vec::bench_retain_100000_alternating_with_alignment   32711.64ns/iter +/- 518.39
+    vec::bench_retain_100000_quarter_false_with_alignment 48943.07ns/iter +/- 583.16
 
     vec::bench_retain_whole_100000              15616.17ns/iter   +/- 82.73
 
@@ -99,4 +101,3 @@
     vec::bench_retain_u64_001000                  417.88ns/iter    +/- 8.98
     vec::bench_retain_u64_010000                 4173.49ns/iter   +/- 59.43
     vec::bench_retain_u64_100000                45586.61ns/iter +/- 5794.73
-

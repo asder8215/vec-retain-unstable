@@ -1,12 +1,28 @@
 Vec::retain_unstable that does the following:
-1) scan forward for something we want to remove
-2) scan backward for something we want to keep (dropping others)
-3) swap_remove to put 2 in 1's place (or nothing if 1 is at the end)
+1) Scan forward for something we want to remove (predicate returns false).
+2) Scan backward for something we want to keep (predicate returns true).
+    * In the reverse search process, we drop elements that the predicate
+      evaluated as false.
+    * In the event that no elements in the reverse search evaluated to true
+      by the predicate, then the vector is simply truncated to remove the
+      current and remaining elements.
+4) Rinse and repeat from 1) until there are no elements we can iterate through.
 
-pub fn retain_unstable<F>(&mut self, mut f: F)
+    pub fn retain_unstable<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut T) -> bool,
     {
+        // Currently we do the following:
+        // 1) Scan forward for something we want to remove (predicate returns false).
+        // 2) Scan backward for something we want to keep (predicate returns true).
+        //    * In the reverse search process, we drop elements that the predicate
+        //      evaluated as false.
+        //    * In the event that no elements in the reverse search evaluated to true
+        //      by the predicate, then the vector is simply truncated to remove the
+        //      current and remaining elements.
+        // 3) Overwrite the forward element with the backward element.
+        // 4) Rinse and repeat from 1) until there are no elements we can iterate through.
+
         let original_len = self.len();
 
         if original_len == 0 {
@@ -91,8 +107,11 @@ pub fn retain_unstable<F>(&mut self, mut f: F)
         // Advance `g.read` early to avoid double drop if `drop_in_place` panicked.
         let mut g =
             PanicGuard { v: self, read: read + 1, write: read, read_back: original_len - 1 };
+        // SAFETY: from earlier loop, we know that this is an element that the predicate
+        // evaluated as false
+        let mut hole = unsafe { &mut *g.v.as_mut_ptr().add(read) };
         // SAFETY: previous `read` is always less than original_len.
-        unsafe { ptr::drop_in_place(&mut *g.v.as_mut_ptr().add(read)) };
+        unsafe { ptr::drop_in_place(hole) };
         let swap = loop {
             if g.read_back == g.write {
                 // No element found to swap with.
@@ -125,7 +144,6 @@ pub fn retain_unstable<F>(&mut self, mut f: F)
         // dropped in future iterations.
         // Logically, this is overwriting vec[write] with vec[read_back]
         unsafe {
-            let hole = &mut *g.v.as_mut_ptr().add(g.write);
             ptr::copy_nonoverlapping(swap, hole, 1);
             g.read_back -= 1;
             g.write += 1;
@@ -133,7 +151,7 @@ pub fn retain_unstable<F>(&mut self, mut f: F)
 
         'retain: while g.read <= g.read_back {
             // SAFETY: g.read <= g.read_back && g.read_back < g.self.len
-            let hole = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
+            hole = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
             if !f(hole) {
                 // Advance `read` early to avoid double drop if `drop_in_place` panicked.
                 g.read += 1;
@@ -142,7 +160,6 @@ pub fn retain_unstable<F>(&mut self, mut f: F)
                 let swap = loop {
                     if g.read_back == g.write {
                         // No element found to swap with.
-                        // return;
                         break 'retain;
                     }
 
@@ -184,13 +201,15 @@ pub fn retain_unstable<F>(&mut self, mut f: F)
         // SAFETY: `write` is always less than or equal to original_len.
         unsafe { g.v.set_len(g.write) };
         mem::forget(g);
-}
+    }
 
 
 
     vec::bench_retain_unstable_100000               36563.43ns/iter  +/- 619.68
     vec::bench_retain_unstable_none_100000              1.24ns/iter    +/- 0.01
-    vec::bench_retain_unstable_quarter_false_100000 51449.73ns/iter +/- 2878.33
+    vec::bench_retain_unstable_quarter_false_100000                42963.59ns/iter +/- 2798.66
+    vec::bench_retain_unstable_100000_alternating_with_alignment   33780.88ns/iter  +/- 358.60
+    vec::bench_retain_unstable_100000_quarter_false_with_alignment 49239.34ns/iter +/- 5107.02
 
     vec::bench_retain_unstable_whole_100000         15662.04ns/iter  +/- 135.53
 

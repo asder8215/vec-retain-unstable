@@ -1,0 +1,334 @@
+Basic algorithm:
+1) Scan forward for an element to remove (drop it once found)
+2) Scan forward for an element to keep, removing all elements that we want to remove
+3) Scan backward for an element to keep (removing elements that we want to remove in the back). Keep doing this until we fill up the gap created by 2) or we have no more elements to look at in the back (inclusive of the element we want to keep from 2))
+4) Repeat from 1) until we have verifiably filtered the vec fully.
+
+pub fn retain_unstable<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut T) -> bool,
+    {
+        // let mut original_len = self.len();
+        let original_len = self.len();
+
+        if original_len == 0 {
+            // Empty case: explicit return allows better optimization, vs letting compiler infer it
+            return;
+        }
+
+        // Vec: [Kept,    Kept,    Hole,    Unchecked,    Unchecked,    Swap,    Dropped,    Dropped]
+        //      |                  ^- write ^- read                     ^-read_back                 |
+        //
+        // Kept: Elements which predicate returns true on.
+        // Hole: Moved or dropped element slot.
+        // Unchecked: Unchecked valid elements.
+        // Swap: The last element that the read_index was pointing to. This could be an element that the
+        // predicate returns true on and we want to overwrite the `Hole` at the write index with this
+        // value or an element that the predicate panicked in which case we still overwrite the `Hole`
+        // with this value (since we only drop elements that the predicate returns false on).
+        // Dropped: Elements which predicate returns false on from the read_back index.
+        //
+        // This drop guard will be invoked when predicate or `drop` of element panicked.
+        // It overwrites the `Hole` with the last `Swap` at the write index and `set_len` to the correct
+        // length. We take care of the following:
+        //     - Do not `drop` any element marked as `Swap`. This is because the `Hole` is
+        //       written with the `Swap` value via `copy_nonoverlapping` outside of this guard,
+        //       and dropping `Swap` will leave `Hole` back to being a `Hole` (which can cause
+        //       a double drop if a `drop` of an element panicked or create an invalid memory
+        //       state for the Vec).
+        //     - We also make sure that `Swap` is not included within the `set_len` of Vec,
+        //       so it's impossible for the Vec to do a double drop on `Swap` and a `Hole`
+        //       written with the content of `Swap`.
+        //     - In the event that `Hole` and `Swap` are pointing to the same element (that is
+        //       read_back == write), we ensure that `remaining` here will be 0, so that no copy
+        //       occurs on overlapping memory.
+        // In cases when predicate and `drop` never panick, this will be optimized out.
+        struct PanicGuard<'a, T, A: Allocator> {
+            v: &'a mut Vec<T, A>,
+            read: usize,
+            read_back: usize,
+            write: usize,
+            // has_hole: bool,
+        }
+
+        impl<T, A: Allocator> Drop for PanicGuard<'_, T, A> {
+            #[cold]
+            fn drop(&mut self) {
+                let num_of_holes = self.read - self.write;
+                let swap_back_items = self.read_back + 1 - self.read;
+                let remaining = core::cmp::min(swap_back_items,num_of_holes);
+
+                unsafe {
+                    ptr::copy_nonoverlapping(self.v.as_ptr().add(self.read_back + 1 - remaining), self.v.as_mut_ptr().add(self.write), remaining);
+                    self.v.set_len(self.read_back + 1 - num_of_holes);
+                }
+            }
+        }
+
+        let mut read = 0;
+
+        loop {
+            // SAFETY: read < original_len
+            let cur = unsafe { self.get_unchecked_mut(read) };
+            if hint::unlikely(!f(cur)) {
+                break;
+            }
+            read += 1;
+            if read == original_len {
+                // All elements are kept, return early.
+                return;
+            }
+        }
+
+        // Critical section starts here and at least one element is going to be removed.
+        // Advance `g.read` early to avoid double drop if `drop_in_place` panicked.
+        let mut g = PanicGuard { v: self, read: read + 1, write: read, read_back: original_len - 1, /*has_hole: true*/ };
+        let hole = unsafe { &mut *g.v.as_mut_ptr().add(read) };
+        // SAFETY: previous `read` is always less than original_len.
+        unsafe { ptr::drop_in_place(hole) };
+
+        loop {
+            if g.read == original_len {
+                // All elements are kept, return early.
+                unsafe { g.v.set_len(g.write) };
+                mem::forget(g);
+                return;
+            }
+
+            // SAFETY: read < original_len
+            let cur = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
+
+            if f(cur) {
+                unsafe {
+                    ptr::copy_nonoverlapping(cur, hole, 1);
+                    g.write += 1;
+                    g.read += 1;
+                }
+                if g.read == original_len {
+                    unsafe { g.v.set_len(g.write) };
+                    mem::forget(g);
+                    return;
+                } else {
+                    break;
+                }
+            }
+
+            g.read += 1;
+            unsafe { ptr::drop_in_place(cur) };
+        };
+
+        loop {
+
+            let swap = unsafe { &mut *g.v.as_mut_ptr().add(g.read_back) };
+            if f(swap) {
+                let hole = unsafe { &mut *g.v.as_mut_ptr().add(g.write) };
+                // Found an element to swap with!
+                unsafe { ptr::copy_nonoverlapping(swap, hole, 1) };
+                g.write += 1;
+                g.read_back -= 1;
+                if g.read_back < g.read {
+                    unsafe { g.v.set_len(g.write) };
+                    mem::forget(g);
+                    return;
+                } else if g.write == g.read {
+                    break;
+                } else {
+                    continue;
+                }
+            }
+
+            g.read_back -= 1;
+            unsafe { ptr::drop_in_place(swap) };
+
+            if g.read_back < g.read {
+                unsafe { g.v.set_len(g.write) };
+                mem::forget(g);
+                return;
+            }
+        }
+
+        // original_len = g.read_back + 1;
+        'retain: loop {
+            let original_len = g.read_back + 1;
+            let hole = loop {
+                // SAFETY: read < original_len
+                let cur = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
+                if !f(cur) {
+                    break cur;
+                }
+                g.read += 1;
+                if g.read == original_len {
+                    // All elements are kept, return early.
+                    break 'retain;
+                }
+            };
+
+            g.read += 1;
+            unsafe { ptr::drop_in_place(hole) };
+
+            loop {
+                if g.read == original_len {
+                    // All elements are kept, return early.
+                    break 'retain;
+                }
+
+                // SAFETY: read < original_len
+                let cur = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
+
+                if f(cur) {
+                    unsafe {
+                        ptr::copy_nonoverlapping(cur, hole, 1);
+                        g.write += 1;
+                        g.read += 1;
+                    }
+                    if g.read == original_len {
+                        break 'retain;
+                    } else {
+                        break;
+                    }
+                }
+
+                g.read += 1;
+                unsafe { ptr::drop_in_place(cur) };
+            };
+
+            loop {
+                let swap = unsafe { &mut *g.v.as_mut_ptr().add(g.read_back) };
+                if f(swap) {
+                    let hole = unsafe { &mut *g.v.as_mut_ptr().add(g.write) };
+                    // Found an element to swap with!
+                    unsafe { ptr::copy_nonoverlapping(swap, hole, 1) };
+                    g.write += 1;
+                    g.read_back -= 1;
+
+                    if g.read_back < g.read {
+                        break 'retain;
+                    } else if g.write == g.read {
+                        break;
+                    } else {
+                        continue;
+                    }
+                    // break swap;
+                }
+
+                g.read_back -= 1;
+                unsafe { ptr::drop_in_place(swap) };
+
+                if g.read_back < g.read {
+                    // All elements are kept, return early.
+                    break 'retain;
+                }
+            }
+
+        }
+
+
+        // We are leaving the critical section and no panic happened,
+        // Commit the length change and forget the guard.
+        // SAFETY: `write` is always less than or equal to original_len.
+        unsafe { g.v.set_len(g.write) };
+        mem::forget(g);
+    }
+
+
+    vec::bench_retain_unstable_100000               41957.82ns/iter  +/- 4855.20
+    vec::bench_retain_unstable_none_100000              1.25ns/iter     +/- 0.01
+    vec::bench_retain_unstable_quarter_false_100000 37236.42ns/iter +/- 10573.97
+
+    vec::bench_retain_unstable_whole_100000         15854.58ns/iter   +/- 462.16
+
+    vec::bench_retain_unstable_whole_u8_000004          1.69ns/iter     +/- 0.42
+    vec::bench_retain_unstable_whole_u8_000008          2.09ns/iter     +/- 0.05
+    vec::bench_retain_unstable_whole_u8_000016          3.40ns/iter     +/- 0.37
+    vec::bench_retain_unstable_whole_u8_000032          5.95ns/iter     +/- 0.23
+    vec::bench_retain_unstable_whole_u8_000064         10.93ns/iter     +/- 0.52
+    vec::bench_retain_unstable_whole_u8_000128         20.92ns/iter     +/- 1.51
+    vec::bench_retain_unstable_whole_u8_000256         45.75ns/iter     +/- 1.23
+    vec::bench_retain_unstable_whole_u8_000512         84.99ns/iter     +/- 0.39
+    vec::bench_retain_unstable_whole_u8_001000        161.11ns/iter     +/- 0.56
+    vec::bench_retain_unstable_whole_u8_010000       1575.19ns/iter   +/- 189.96
+    vec::bench_retain_unstable_whole_u8_100000      15550.66ns/iter    +/- 95.79
+
+    vec::bench_retain_unstable_whole_u16_000004         1.69ns/iter     +/- 0.04
+    vec::bench_retain_unstable_whole_u16_000008         2.12ns/iter     +/- 0.05
+    vec::bench_retain_unstable_whole_u16_000016         3.44ns/iter     +/- 0.21
+    vec::bench_retain_unstable_whole_u16_000032         5.98ns/iter     +/- 0.15
+    vec::bench_retain_unstable_whole_u16_000064        10.96ns/iter     +/- 0.22
+    vec::bench_retain_unstable_whole_u16_000128        20.96ns/iter     +/- 0.19
+    vec::bench_retain_unstable_whole_u16_000256        40.93ns/iter     +/- 0.20
+    vec::bench_retain_unstable_whole_u16_000512        86.34ns/iter     +/- 4.02
+    vec::bench_retain_unstable_whole_u16_001000       161.94ns/iter     +/- 1.84
+    vec::bench_retain_unstable_whole_u16_010000      1565.12ns/iter     +/- 6.54
+    vec::bench_retain_unstable_whole_u16_100000     15618.80ns/iter   +/- 202.29
+
+    vec::bench_retain_unstable_whole_u32_000004         1.66ns/iter     +/- 0.01
+    vec::bench_retain_unstable_whole_u32_000008         2.08ns/iter     +/- 0.62
+    vec::bench_retain_unstable_whole_u32_000016         3.43ns/iter     +/- 0.07
+    vec::bench_retain_unstable_whole_u32_000032         6.02ns/iter     +/- 0.55
+    vec::bench_retain_unstable_whole_u32_000064        11.11ns/iter     +/- 0.18
+    vec::bench_retain_unstable_whole_u32_000128        21.21ns/iter     +/- 0.27
+    vec::bench_retain_unstable_whole_u32_000256        41.36ns/iter     +/- 0.41
+    vec::bench_retain_unstable_whole_u32_000512        86.77ns/iter     +/- 0.93
+    vec::bench_retain_unstable_whole_u32_001000       163.11ns/iter     +/- 1.36
+    vec::bench_retain_unstable_whole_u32_010000      1587.21ns/iter    +/- 14.11
+    vec::bench_retain_unstable_whole_u32_100000     15809.78ns/iter   +/- 120.15
+
+    vec::bench_retain_unstable_whole_u64_000004         1.68ns/iter     +/- 0.02
+    vec::bench_retain_unstable_whole_u64_000008         2.10ns/iter     +/- 0.03
+    vec::bench_retain_unstable_whole_u64_000016         3.39ns/iter     +/- 0.69
+    vec::bench_retain_unstable_whole_u64_000032         6.09ns/iter     +/- 0.35
+    vec::bench_retain_unstable_whole_u64_000064        11.37ns/iter     +/- 1.56
+    vec::bench_retain_unstable_whole_u64_000128        20.94ns/iter     +/- 0.57
+    vec::bench_retain_unstable_whole_u64_000256        40.87ns/iter     +/- 2.54
+    vec::bench_retain_unstable_whole_u64_000512        84.63ns/iter     +/- 0.77
+    vec::bench_retain_unstable_whole_u64_001000       161.07ns/iter     +/- 1.29
+    vec::bench_retain_unstable_whole_u64_010000      1587.52ns/iter   +/- 105.23
+    vec::bench_retain_unstable_whole_u64_100000     15878.47ns/iter   +/- 146.92
+
+    vec::bench_retain_unstable_u8_000004                7.15ns/iter     +/- 0.29
+    vec::bench_retain_unstable_u8_000008                7.72ns/iter     +/- 0.23
+    vec::bench_retain_unstable_u8_000016               10.63ns/iter     +/- 0.35
+    vec::bench_retain_unstable_u8_000032               17.21ns/iter     +/- 1.82
+    vec::bench_retain_unstable_u8_000064               29.38ns/iter     +/- 0.83
+    vec::bench_retain_unstable_u8_000128               57.08ns/iter     +/- 1.21
+    vec::bench_retain_unstable_u8_000256              105.48ns/iter     +/- 0.90
+    vec::bench_retain_unstable_u8_000512              201.21ns/iter     +/- 3.37
+    vec::bench_retain_unstable_u8_001000              386.24ns/iter     +/- 7.11
+    vec::bench_retain_unstable_u8_010000             3827.43ns/iter    +/- 56.11
+    vec::bench_retain_unstable_u8_100000            38236.11ns/iter  +/- 1439.20
+
+    vec::bench_retain_unstable_u16_000004               5.83ns/iter     +/- 0.12
+    vec::bench_retain_unstable_u16_000008               7.61ns/iter     +/- 0.39
+    vec::bench_retain_unstable_u16_000016              10.92ns/iter     +/- 0.18
+    vec::bench_retain_unstable_u16_000032              18.61ns/iter     +/- 0.79
+    vec::bench_retain_unstable_u16_000064              33.09ns/iter     +/- 0.82
+    vec::bench_retain_unstable_u16_000128              64.99ns/iter     +/- 0.44
+    vec::bench_retain_unstable_u16_000256             120.96ns/iter     +/- 1.36
+    vec::bench_retain_unstable_u16_000512             235.43ns/iter     +/- 2.62
+    vec::bench_retain_unstable_u16_001000             452.10ns/iter     +/- 3.86
+    vec::bench_retain_unstable_u16_010000            4450.73ns/iter    +/- 62.66
+    vec::bench_retain_unstable_u16_100000           44202.27ns/iter   +/- 289.92
+
+    vec::bench_retain_unstable_u32_000004               5.86ns/iter     +/- 0.03
+    vec::bench_retain_unstable_u32_000008               6.76ns/iter     +/- 0.04
+    vec::bench_retain_unstable_u32_000016               9.87ns/iter     +/- 0.03
+    vec::bench_retain_unstable_u32_000032              16.51ns/iter     +/- 0.27
+    vec::bench_retain_unstable_u32_000064              30.20ns/iter     +/- 0.10
+    vec::bench_retain_unstable_u32_000128              60.52ns/iter     +/- 0.17
+    vec::bench_retain_unstable_u32_000256             114.31ns/iter     +/- 0.38
+    vec::bench_retain_unstable_u32_000512             224.10ns/iter     +/- 1.40
+    vec::bench_retain_unstable_u32_001000             427.41ns/iter     +/- 3.75
+    vec::bench_retain_unstable_u32_010000            4169.17ns/iter    +/- 15.62
+    vec::bench_retain_unstable_u32_100000           41731.42ns/iter   +/- 458.14
+
+    vec::bench_retain_unstable_u64_000004               6.10ns/iter     +/- 0.07
+    vec::bench_retain_unstable_u64_000008               7.80ns/iter     +/- 1.00
+    vec::bench_retain_unstable_u64_000016              11.57ns/iter     +/- 0.62
+    vec::bench_retain_unstable_u64_000032              19.95ns/iter     +/- 1.01
+    vec::bench_retain_unstable_u64_000064              34.80ns/iter     +/- 1.15
+    vec::bench_retain_unstable_u64_000128              69.48ns/iter     +/- 1.36
+    vec::bench_retain_unstable_u64_000256             131.92ns/iter     +/- 1.64
+    vec::bench_retain_unstable_u64_000512             252.05ns/iter     +/- 3.74
+    vec::bench_retain_unstable_u64_001000             480.78ns/iter     +/- 2.98
+    vec::bench_retain_unstable_u64_010000            4705.15ns/iter    +/- 33.67
+    vec::bench_retain_unstable_u64_100000           47195.05ns/iter   +/- 398.00
